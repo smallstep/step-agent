@@ -2,7 +2,9 @@
 
 set -e
 
-DISTRO_CONTAINER_LIST=(fedora:latest redhat/ubi9:latest quay.io/centos/centos:stream9 almalinux:latest rockylinux/rockylinux:9.3.20231119 debian:latest ubuntu:latest archlinux:base)
+# almalinux is pinned to explicit majors rather than :latest so EL9 and EL10
+# are each always covered — :latest silently drifts to the newest major.
+DISTRO_CONTAINER_LIST=(fedora:latest redhat/ubi9:latest quay.io/centos/centos:stream9 almalinux:9 almalinux:10 rockylinux/rockylinux:9.3.20231119 debian:latest ubuntu:latest archlinux:base)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Narrow the run to specific images, e.g. DISTROS="archlinux:base debian:latest"
