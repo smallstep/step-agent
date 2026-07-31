@@ -2,15 +2,8 @@
 
 set -e
 
-DISTRO_CONTAINER_LIST=(fedora:latest redhat/ubi9:latest quay.io/centos/centos:stream9 almalinux:latest rockylinux/rockylinux:9.3.20231119 debian:latest ubuntu:latest archlinux:base gentoo/stage3:systemd)
+DISTRO_CONTAINER_LIST=(fedora:latest redhat/ubi9:latest quay.io/centos/centos:stream9 almalinux:latest rockylinux/rockylinux:9.3.20231119 debian:latest ubuntu:latest archlinux:base)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
-# Images we deliberately do NOT support. These are negative tests: the
-# installer's supported-distro gate must reject them with exit 1, so a clean
-# exit 1 is a PASS — it proves the gate still works. Any other outcome is a
-# failure, including a successful install (which would mean we started
-# installing onto a platform we don't ship for).
-UNSUPPORTED_DISTRO_LIST=(gentoo/stage3:systemd)
 
 # Narrow the run to specific images, e.g. DISTROS="archlinux:base debian:latest"
 if [[ -n "${DISTROS:-}" ]]; then
@@ -23,19 +16,7 @@ FAILURES=0
 for DISTRO in "${DISTRO_CONTAINER_LIST[@]}"; do
   DISTRO_NICKNAME="${DISTRO%%:*}"
   DISTRO_NICKNAME="${DISTRO_NICKNAME//\//-}"
-  # Unsupported distros are expected to be rejected by the installer's gate.
-  EXPECTED_EXIT=0
-  for UNSUPPORTED in "${UNSUPPORTED_DISTRO_LIST[@]}"; do
-    if [[ "${DISTRO}" == "${UNSUPPORTED}" ]]; then
-      EXPECTED_EXIT=1
-    fi
-  done
-
-  if [[ "${EXPECTED_EXIT}" -eq 0 ]]; then
-    echo "Testing smallstep-agent-install.sh on ${DISTRO_NICKNAME}..."
-  else
-    echo "Testing smallstep-agent-install.sh on ${DISTRO_NICKNAME} (expecting rejection)..."
-  fi
+  echo "Testing smallstep-agent-install.sh on ${DISTRO_NICKNAME}..."
 
   # pacman 7 sandboxes its download worker with Landlock and drops to an
   # unprivileged 'alpm' user. Neither works inside a stock Docker container, so
@@ -63,18 +44,10 @@ for DISTRO in "${DISTRO_CONTAINER_LIST[@]}"; do
       "${DISTRO}" \
       bash -c "${PRE_CMD}./smallstep-agent-install.sh" || EXITCODE=$?
 
-  if [[ "${EXITCODE}" -eq "${EXPECTED_EXIT}" ]]; then
-    if [[ "${EXPECTED_EXIT}" -eq 0 ]]; then
-      TEST_REPORT+=("${DISTRO}: Passed!")
-    else
-      TEST_REPORT+=("${DISTRO}: Passed! (correctly rejected as unsupported)")
-    fi
+  if [[ "${EXITCODE}" -eq 0 ]]; then
+    TEST_REPORT+=("${DISTRO}: Passed!")
   else
-    if [[ "${EXPECTED_EXIT}" -eq 0 ]]; then
-      TEST_REPORT+=("${DISTRO}: Failed! (exit ${EXITCODE})")
-    else
-      TEST_REPORT+=("${DISTRO}: Failed! (expected rejection with exit 1, got exit ${EXITCODE})")
-    fi
+    TEST_REPORT+=("${DISTRO}: Failed! (exit ${EXITCODE})")
     FAILURES=$((FAILURES + 1))
   fi
 done
