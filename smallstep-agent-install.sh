@@ -12,8 +12,11 @@
 
 set -eo pipefail
 
-bold=$(tput bold)
-normal=$(tput sgr0)
+# tput fails when TERM is unset or dumb (cron, CI, `curl ... | sudo bash` from a
+# provisioning system). Under `set -e` that would abort the install before it
+# starts, so fall back to unstyled output instead.
+bold=$(tput bold 2>/dev/null || true)
+normal=$(tput sgr0 2>/dev/null || true)
 
 helptext(){
 cat <<'EOF'
@@ -109,11 +112,43 @@ if [[ -v STEP_AGENT_TEAM ]]; then
     TEAM=${STEP_AGENT_TEAM}
 fi
 
-if [ "$(grep -Ei 'fedora|redhat|centos|rocky|almalinux|debian|buntu|arch' /etc/*release)" ]; then
+# Identify the distribution from /etc/os-release (see os-release(5)): ID names
+# the distribution itself, ID_LIKE the ones it derives from. Values may be
+# quoted or bare.
+os_release_field() {
+  [ -r /etc/os-release ] || return 0
+  awk -F= -v key="$1" '$1 == key { gsub(/^"|"$/, "", $2); print $2; exit }' /etc/os-release
+}
 
-  DISTRO=$(grep ^ID= /etc/os-release | cut -d'=' -f2 | tr -d '"')
+DISTRO=$(os_release_field ID)
+DISTRO_LIKE=$(os_release_field ID_LIKE)
 
-  if [[ "$DISTRO" =~ ^(rhel|centos|rocky|almalinux)$ ]]; then
+FAMILY=""
+case "$DISTRO" in
+  fedora)                      FAMILY="fedora" ;;
+  rhel|centos|rocky|almalinux) FAMILY="el" ;;
+  debian|ubuntu)               FAMILY="debian" ;;
+  arch)                        FAMILY="arch" ;;
+esac
+
+# Derivatives are routed on ID_LIKE, which is what covers Linux Mint, Pop!_OS,
+# Manjaro and EndeavourOS. ID_LIKE is deliberately NOT honoured for the fedora
+# and el families: every RHEL-family os-release carries fedora in ID_LIKE (RHEL
+# 9 is literally ID_LIKE="fedora"), so doing so would point Oracle Linux and
+# similar rebuilds at the Fedora repo -- the wrong repo rather than an honest
+# refusal. Those fall through to the unsupported message below instead.
+# ID_LIKE is space-separated, so the loop word-splits it on purpose.
+if [ -z "$FAMILY" ]; then
+  for like in $DISTRO_LIKE; do
+    case "$like" in
+      debian|ubuntu) FAMILY="debian"; break ;;
+      arch)          FAMILY="arch";   break ;;
+    esac
+  done
+fi
+
+case "$FAMILY" in
+  el)
     echo "Setting up the YUM/DNF repository for ${DISTRO}..."
 
     cat << EOT > /etc/yum.repos.d/smallstep.repo
@@ -128,9 +163,8 @@ EOT
 
   dnf makecache
   dnf install --best -y step-agent
-  fi
-
-  if [[ "$DISTRO" == "fedora" ]]; then
+    ;;
+  fedora)
     echo "Setting up the DNF repository for ${DISTRO}..."
 
     cat << EOT > /etc/yum.repos.d/smallstep.repo
@@ -145,9 +179,8 @@ EOT
 
   dnf makecache
   dnf install --best -y step-agent
-  fi
-
-  if [ "$(grep -Ei 'debian|buntu' /etc/*release)" ]; then
+    ;;
+  debian)
     echo "Setting up the Apt repository for ${DISTRO}..."
     apt-get update && apt-get install -y --no-install-recommends curl vim gpg ca-certificates
     curl -fsSL https://packages.smallstep.com/keys/apt/repo-signing-key.gpg -o /etc/apt/trusted.gpg.d/smallstep.asc
@@ -155,9 +188,8 @@ EOT
 deb [signed-by=/etc/apt/trusted.gpg.d/smallstep.asc] https://packages.smallstep.com/stable/debian debs main
 EOT
   apt-get update && apt-get -y install step-agent
-  fi
-
-  if [ "$(grep -Ei 'arch' /etc/*release)" ]; then
+    ;;
+  arch)
     echo "Installing step-agent for ${DISTRO}..."
 
     PKG_URL="https://packages.smallstep.com/stable/linux/step-agent_${ARCH}_latest.pkg.tar.zst"
@@ -165,16 +197,27 @@ EOT
 
     echo "Downloading step-agent..."
     curl -fsSL -o "$PKG_FILE" "$PKG_URL"
+
+    # Refresh the sync databases so pacman can resolve step-agent's
+    # dependencies (tpm2-tss, tpm2-openssl, desktop-file-utils, polkit,
+    # p11-kit). Without this, `pacman -U` fails outright on a host whose
+    # databases have never been populated.
+    #
+    # NOTE: this is a `-Sy` (refresh) rather than a `-Syu` (full upgrade), so
+    # it leaves the host in Arch's discouraged "partial upgrade" state. The
+    # alternative is upgrading every package on the box, which an agent
+    # installer should not do unilaterally.
+    pacman -Sy --noconfirm
     pacman -U --noconfirm "$PKG_FILE"
     rm -f "$PKG_FILE"
-  fi
-
-else
-  echo "Only the following Linux distributions are supported at this time:"
-  echo ""
-  echo "Fedora, RHEL, Centos Stream, Rocky Linux, AlmaLinux, Debian, Ubuntu, and Arch Linux variants"
-  exit 1
-fi
+    ;;
+  *)
+    echo "Only the following Linux distributions are supported at this time:"
+    echo ""
+    echo "Fedora, RHEL, Centos Stream, Rocky Linux, AlmaLinux, Debian, Ubuntu, and Arch Linux variants"
+    exit 1
+    ;;
+esac
 echo ""
 echo "The Smallstep agent has been installed!"
 echo ""
