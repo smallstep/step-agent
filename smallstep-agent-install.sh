@@ -12,8 +12,11 @@
 
 set -eo pipefail
 
-bold=$(tput bold)
-normal=$(tput sgr0)
+# tput fails when TERM is unset or dumb (cron, CI, `curl ... | sudo bash` from a
+# provisioning system). Under `set -e` that would abort the install before it
+# starts, so fall back to unstyled output instead.
+bold=$(tput bold 2>/dev/null || true)
+normal=$(tput sgr0 2>/dev/null || true)
 
 helptext(){
 cat <<'EOF'
@@ -165,6 +168,17 @@ EOT
 
     echo "Downloading step-agent..."
     curl -fsSL -o "$PKG_FILE" "$PKG_URL"
+
+    # Refresh the sync databases so pacman can resolve step-agent's
+    # dependencies (tpm2-tss, tpm2-openssl, desktop-file-utils, polkit,
+    # p11-kit). Without this, `pacman -U` fails outright on a host whose
+    # databases have never been populated.
+    #
+    # NOTE: this is a `-Sy` (refresh) rather than a `-Syu` (full upgrade), so
+    # it leaves the host in Arch's discouraged "partial upgrade" state. The
+    # alternative is upgrading every package on the box, which an agent
+    # installer should not do unilaterally.
+    pacman -Sy --noconfirm
     pacman -U --noconfirm "$PKG_FILE"
     rm -f "$PKG_FILE"
   fi
